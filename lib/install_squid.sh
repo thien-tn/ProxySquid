@@ -55,20 +55,117 @@ cleanup_old_installation() {
     sleep 2
 }
 
+# Hàm debug trạng thái APT
+debug_apt_status() {
+    echo -e "\n${YELLOW}=== DEBUG APT STATUS ===${NC}"
+    
+    # Kiểm tra lock files
+    echo "Lock files status:"
+    for lock_file in "/var/lib/dpkg/lock" "/var/lib/dpkg/lock-frontend" "/var/cache/apt/archives/lock"; do
+        if [[ -f "$lock_file" ]]; then
+            if fuser "$lock_file" >/dev/null 2>&1; then
+                echo "  $lock_file: ${RED}LOCKED${NC}"
+            else
+                echo "  $lock_file: ${GREEN}FREE${NC}"
+            fi
+        else
+            echo "  $lock_file: ${YELLOW}NOT FOUND${NC}"
+        fi
+    done
+    
+    # Kiểm tra APT processes
+    echo "APT processes:"
+    local apt_processes=$(pgrep -f "apt|dpkg" 2>/dev/null || echo "none")
+    echo "  Running: $apt_processes"
+    
+    # Kiểm tra sources list
+    echo "Sources list:"
+    if [[ -f /etc/apt/sources.list ]]; then
+        local source_count=$(grep -c "^deb " /etc/apt/sources.list 2>/dev/null || echo "0")
+        echo "  Main sources: $source_count"
+    fi
+    
+    local additional_sources=$(find /etc/apt/sources.list.d/ -name "*.list" 2>/dev/null | wc -l)
+    echo "  Additional sources: $additional_sources"
+    
+    # Kiểm tra disk space
+    echo "Disk space:"
+    local available_space=$(df /var/cache/apt | awk 'NR==2 {print $4}')
+    echo "  Available: ${available_space}KB"
+    
+    # Kiểm tra last update
+    if [[ -f /var/cache/apt/pkgcache.bin ]]; then
+        local last_update=$(stat -c %Y /var/cache/apt/pkgcache.bin 2>/dev/null)
+        local current_time=$(date +%s)
+        local age=$((current_time - last_update))
+        echo "  Last update: ${age}s ago"
+    fi
+    
+    echo -e "${YELLOW}=========================${NC}\n"
+}
+
 # Hàm chuẩn bị hệ thống
 prepare_system() {
     info_message "Đang chuẩn bị hệ thống..."
     
     # Disable interactive prompts
     export DEBIAN_FRONTEND=noninteractive
+    export NEEDRESTART_MODE=a
     
-    # Update package list với timeout
+    # Ensure system is not running updates
+    info_message "Kiểm tra trạng thái hệ thống..."
+    
+    # Wait for automatic updates to finish
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        warning_message "Đang đợi automatic updates hoàn thành..."
+        sleep 10
+    done
+    
+    # Kill any hanging apt processes
+    pkill -f apt-get 2>/dev/null || true
+    pkill -f dpkg 2>/dev/null || true
+    sleep 2
+    
+    # Fix any broken packages
+    info_message "Sửa chữa các package bị hỏng..."
+    apt-get -f install -y 2>/dev/null || true
+    
+    # Configure APT to avoid prompts
+    cat > /etc/apt/apt.conf.d/99squid-install <<EOF
+APT::Get::Assume-Yes "true";
+APT::Get::Force-Yes "false";
+Dpkg::Options {
+    "--force-confdef";
+    "--force-confold";
+}
+EOF
+    
+    # Update package list với retry
     info_message "Đang cập nhật danh sách gói..."
-    timeout 300 apt-get update || {
-        warning_message "Update gói có thể chậm, tiếp tục cài đặt..."
-    }
+    local update_success=false
+    for i in {1..3}; do
+        if timeout 300 apt-get update; then
+            update_success=true
+            break
+        else
+            warning_message "Lần thử $i/3 update thất bại"
+            if [[ $i -lt 3 ]]; then
+                sleep 5
+                # Try to fix sources
+                apt-get clean
+                rm -rf /var/lib/apt/lists/*
+                mkdir -p /var/lib/apt/lists/
+            fi
+        fi
+    done
+    
+    if [[ "$update_success" != "true" ]]; then
+        error_message "Không thể update package list sau 3 lần thử"
+        return 1
+    fi
     
     # Cài đặt các gói cơ bản
+    info_message "Đang cài đặt các gói cơ bản..."
     local essential_packages=(
         "software-properties-common"
         "curl"
@@ -77,31 +174,75 @@ prepare_system() {
         "ca-certificates"
         "gnupg"
         "lsb-release"
+        "apt-transport-https"
     )
     
     for package in "${essential_packages[@]}"; do
         info_message "Đang cài đặt $package..."
-        timeout 300 apt-get install -y "$package" || {
+        if ! timeout 300 apt-get install -y --no-install-recommends "$package"; then
             warning_message "Không thể cài đặt $package, tiếp tục..."
-        }
+        else
+            success_message "Đã cài đặt $package"
+        fi
     done
     
-    # Add universe repository
-    add-apt-repository universe -y 2>/dev/null
+    # Add universe repository cho Ubuntu
+    if grep -q "Ubuntu" /etc/os-release; then
+        info_message "Thêm Universe repository cho Ubuntu..."
+        add-apt-repository universe -y 2>/dev/null || {
+            warning_message "Không thể thêm universe repository"
+        }
+    fi
     
     # Update lại sau khi add repo
+    info_message "Cập nhật lại package list..."
     timeout 300 apt-get update || {
-        warning_message "Update sau khi add repo có thể chậm..."
+        warning_message "Update sau khi add repo có thể chậm, tiếp tục..."
     }
     
     success_message "Chuẩn bị hệ thống hoàn tất"
+    return 0
 }
 
 # Hàm cài đặt dependencies
 install_dependencies() {
     info_message "Đang cài đặt các gói phụ thuộc..."
     
-    # Danh sách các gói cần thiết
+    # Debug APT status trước khi bắt đầu
+    debug_apt_status
+    
+    # Fix các vấn đề apt trước khi cài đặt
+    info_message "Đang chuẩn bị APT..."
+    
+    # Ensure dpkg is not locked
+    if fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
+        warning_message "Đợi process khác hoàn thành..."
+        sleep 10
+    fi
+    
+    # Fix broken packages nếu có
+    apt-get -f install -y 2>/dev/null || true
+    
+    # Configure unattended-upgrades để tránh conflicts
+    echo 'APT::Periodic::Unattended-Upgrade "0";' > /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null || true
+    
+    # Update package list with better error handling
+    info_message "Đang cập nhật danh sách packages..."
+    for i in {1..3}; do
+        if timeout 300 apt-get update; then
+            success_message "Cập nhật package list thành công"
+            break
+        else
+            warning_message "Lần thử $i/3 cập nhật package list thất bại"
+            if [[ $i -eq 3 ]]; then
+                error_message "Không thể cập nhật package list sau 3 lần thử"
+                return 1
+            fi
+            sleep 5
+        fi
+    done
+    
+    # Danh sách các gói cần thiết cho Ubuntu
     local packages=(
         "squid"
         "apache2-utils"
@@ -115,27 +256,105 @@ install_dependencies() {
         "ufw"
         "iproute2"
         "netfilter-persistent"
+        "openssl"
+        "ca-certificates"
+        "gnupg"
+        "lsb-release"
     )
     
-    # Cài đặt từng gói một
+    # Cài đặt từng gói một với retry logic
+    local failed_packages=()
+    
     for package in "${packages[@]}"; do
         info_message "Đang cài đặt $package..."
         
-        if ! timeout 300 apt-get install -y "$package"; then
-            error_message "Không thể cài đặt $package"
-            return 1
+        # Kiểm tra nếu package đã được cài đặt
+        if dpkg -l | grep -q "^ii.*$package "; then
+            success_message "$package đã được cài đặt trước đó"
+            continue
         fi
         
-        # Kiểm tra package đã được cài đặt chưa
-        if ! dpkg -l | grep -q "^ii.*$package"; then
-            error_message "Package $package không được cài đặt đúng"
-            return 1
-        fi
+        # Thử cài đặt package với retry
+        local install_success=false
+        for attempt in {1..3}; do
+            if timeout 300 apt-get install -y --no-install-recommends "$package"; then
+                install_success=true
+                break
+            else
+                warning_message "Lần thử $attempt/3 cài đặt $package thất bại"
+                if [[ $attempt -lt 3 ]]; then
+                    sleep 2
+                    # Try to fix any issues
+                    apt-get -f install -y 2>/dev/null || true
+                fi
+            fi
+        done
         
-        success_message "Đã cài đặt $package thành công"
+        if [[ "$install_success" == "true" ]]; then
+            # Kiểm tra package đã được cài đặt đúng chưa
+            if dpkg -l | grep -q "^ii.*$package "; then
+                success_message "Đã cài đặt $package thành công"
+            else
+                warning_message "Package $package có thể chưa được cài đặt hoàn toàn"
+                failed_packages+=("$package")
+            fi
+        else
+            error_message "Không thể cài đặt $package sau 3 lần thử"
+            failed_packages+=("$package")
+        fi
     done
     
-    success_message "Tất cả dependencies đã được cài đặt"
+    # Kiểm tra các packages bị fail
+    if [[ ${#failed_packages[@]} -gt 0 ]]; then
+        warning_message "Các packages sau không được cài đặt: ${failed_packages[*]}"
+        
+        # Thử cài đặt alternatives cho một số packages quan trọng
+        for package in "${failed_packages[@]}"; do
+            case "$package" in
+                "iptables-persistent")
+                    info_message "Thử cài đặt iptables-save thay thế..."
+                    apt-get install -y iptables 2>/dev/null || true
+                    ;;
+                "netfilter-persistent")
+                    info_message "Bỏ qua netfilter-persistent, sẽ sử dụng iptables-save"
+                    ;;
+                "squid")
+                    error_message "Squid là package bắt buộc, không thể tiếp tục"
+                    return 1
+                    ;;
+                "apache2-utils")
+                    error_message "apache2-utils là package bắt buộc cho authentication"
+                    return 1
+                    ;;
+                "sqlite3")
+                    error_message "sqlite3 là package bắt buộc cho database"
+                    return 1
+                    ;;
+            esac
+        done
+    fi
+    
+    # Kiểm tra các packages quan trọng
+    local critical_packages=("squid" "apache2-utils" "sqlite3")
+    for package in "${critical_packages[@]}"; do
+        if ! dpkg -l | grep -q "^ii.*$package "; then
+            error_message "Package quan trọng $package chưa được cài đặt"
+            return 1
+        fi
+    done
+    
+    # Clean up
+    apt-get autoremove -y 2>/dev/null || true
+    apt-get autoclean 2>/dev/null || true
+    
+    success_message "Cài đặt dependencies hoàn tất"
+    
+    # Hiển thị thống kê
+    info_message "Thống kê cài đặt:"
+    echo "- Tổng packages: ${#packages[@]}"
+    echo "- Thành công: $((${#packages[@]} - ${#failed_packages[@]}))"
+    echo "- Thất bại: ${#failed_packages[@]}"
+    
     return 0
 }
 
