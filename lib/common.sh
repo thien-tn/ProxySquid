@@ -15,6 +15,7 @@ DB_PATH="/var/lib/proxy-manager/proxy.db"
 PROXY_INFO_FILE="/root/proxy_info.txt"
 LOG_FILE="/var/log/proxy-manager.log"
 PROXY_PORT=8080
+SQUID_PORT=8080
 
 # Màu sắc cho terminal
 RED='\033[0;31m'

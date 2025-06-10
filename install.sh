@@ -73,7 +73,7 @@ show_main_menu() {
             10) check_service_status ;;
             11) restart_service ;;
             12) backup_database ;;
-            13) uninstall_squid ;;
+            13) show_uninstall_menu ;;
             14) 
                 echo "Đang thoát..."
                 exit 0 
@@ -112,7 +112,7 @@ main() {
         
         if [[ "$INSTALL" == 'y' || "$INSTALL" == 'Y' ]]; then
             # Cài đặt Squid
-            install_squid_proxy
+            install_squid
             
             # Sau khi cài đặt, hiển thị menu quản lý
             show_main_menu
