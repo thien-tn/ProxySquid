@@ -86,6 +86,57 @@ show_main_menu() {
     done
 }
 
+# Hàm test các function cơ bản
+test_basic_functions() {
+    info_message "Đang test các function cơ bản..."
+    
+    echo -e "\n${YELLOW}=== KIỂM TRA CÁC FUNCTION ===${NC}"
+    
+    # Test detect_os
+    echo -n "detect_os: "
+    if detect_os >/dev/null 2>&1; then
+        echo -e "${GREEN}OK${NC} (OS: $OStype)"
+    else
+        echo -e "${RED}FAIL${NC}"
+        return 1
+    fi
+    
+    # Test detect_network_interface
+    echo -n "detect_network_interface: "
+    local test_interface=$(detect_network_interface)
+    if [[ -n "$test_interface" ]]; then
+        echo -e "${GREEN}OK${NC} (Interface: $test_interface)"
+    else
+        echo -e "${RED}FAIL${NC}"
+        return 1
+    fi
+    
+    # Test check_root
+    echo -n "check_root: "
+    if [[ $EUID -eq 0 ]]; then
+        echo -e "${GREEN}OK${NC} (Running as root)"
+    else
+        echo -e "${RED}FAIL${NC} (Not root)"
+        return 1
+    fi
+    
+    # Test required commands
+    local required_commands=("apt-get" "systemctl" "sqlite3" "openssl")
+    for cmd in "${required_commands[@]}"; do
+        echo -n "Command $cmd: "
+        if command -v "$cmd" >/dev/null 2>&1; then
+            echo -e "${GREEN}OK${NC}"
+        else
+            echo -e "${RED}MISSING${NC}"
+        fi
+    done
+    
+    echo -e "${YELLOW}=============================${NC}\n"
+    
+    success_message "Kiểm tra function cơ bản hoàn tất"
+    return 0
+}
+
 # Hàm main
 main() {
     # Kiểm tra quyền root
@@ -101,21 +152,56 @@ main() {
     detect_network_interface
     
     # Kiểm tra Squid đã được cài đặt chưa
+    info_message "Đang kiểm tra trạng thái cài đặt Squid..."
+    
     if is_squid_installed; then
         # Nếu đã cài đặt, hiển thị menu quản lý
+        success_message "Squid đã được cài đặt, chuyển đến menu quản lý..."
+        debug_squid_status
+        pause
         show_main_menu
     else
         # Nếu chưa cài đặt, tiến hành cài đặt
+        warning_message "Squid HTTP proxy server chưa được cài đặt."
+        debug_squid_status
+        
         show_banner
         info_message "Squid HTTP proxy server chưa được cài đặt."
         read -p "Bạn có muốn cài đặt Squid HTTP proxy server? (y/n): " -e -i y INSTALL
         
         if [[ "$INSTALL" == 'y' || "$INSTALL" == 'Y' ]]; then
-            # Cài đặt Squid
-            install_squid
+            info_message "Bắt đầu quá trình cài đặt Squid..."
             
-            # Sau khi cài đặt, hiển thị menu quản lý
-            show_main_menu
+            # Test các function cơ bản trước
+            if ! test_basic_functions; then
+                error_message "Kiểm tra function cơ bản thất bại!"
+                exit 1
+            fi
+            
+            # Kiểm tra môi trường trước khi cài đặt
+            info_message "Đang kiểm tra môi trường hệ thống..."
+            
+            # Cài đặt Squid với error handling
+            if install_squid; then
+                success_message "Cài đặt Squid thành công!"
+                pause
+                
+                # Sau khi cài đặt thành công, hiển thị menu quản lý
+                show_main_menu
+            else
+                error_message "Cài đặt Squid không thành công!"
+                error_message "Vui lòng kiểm tra lỗi ở trên và thử lại."
+                
+                # Hiển thị thông tin debug
+                echo -e "\n${YELLOW}Thông tin debug:${NC}"
+                echo "- OS: $OStype"
+                echo "- Interface: $(detect_network_interface)"
+                echo "- User: $(whoami)"
+                echo "- Squid installed: $(is_squid_installed && echo "Yes" || echo "No")"
+                
+                read -p "Nhấn Enter để thoát..."
+                exit 1
+            fi
         else
             info_message "Đã hủy cài đặt. Thoát..."
             exit 0

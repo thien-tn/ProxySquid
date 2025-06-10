@@ -59,9 +59,59 @@ pause() {
     read -p "Nhấn Enter để tiếp tục..."
 }
 
+# Hàm kiểm tra quyền root
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        error_message "Script này cần chạy với quyền root"
+        exit 1
+    fi
+}
+
+# Hàm kiểm tra bash shell
+check_bash() {
+    if [[ -z "$BASH_VERSION" ]]; then
+        error_message "Script này cần được chạy với bash"
+        exit 1
+    fi
+    
+    if readlink /proc/$$/exe | grep -qs "dash"; then
+        error_message "Script này cần được chạy với bash, không phải sh"
+        exit 1
+    fi
+}
+
 # Hàm kiểm tra xem Squid đã được cài đặt chưa
 is_squid_installed() {
-    [[ -e /etc/squid/squid.conf ]] && command -v squid >/dev/null 2>&1 && return 0 || return 1
+    # Kiểm tra file cấu hình
+    if [[ ! -f /etc/squid/squid.conf ]]; then
+        return 1
+    fi
+    
+    # Kiểm tra command squid
+    if ! command -v squid >/dev/null 2>&1; then
+        return 1
+    fi
+    
+    # Kiểm tra service có tồn tại không
+    if ! systemctl list-unit-files | grep -q "squid.service"; then
+        return 1
+    fi
+    
+    return 0
+}
+
+# Hàm debug kiểm tra trạng thái Squid
+debug_squid_status() {
+    echo -e "\n${YELLOW}=== DEBUG SQUID STATUS ===${NC}"
+    echo "Config file exists: $([[ -f /etc/squid/squid.conf ]] && echo "YES" || echo "NO")"
+    echo "Squid command available: $(command -v squid >/dev/null 2>&1 && echo "YES" || echo "NO")"
+    echo "Squid service exists: $(systemctl list-unit-files | grep -q "squid.service" && echo "YES" || echo "NO")"
+    echo "Squid service active: $(systemctl is-active squid 2>/dev/null || echo "inactive")"
+    echo "Squid service enabled: $(systemctl is-enabled squid 2>/dev/null || echo "disabled")"
+    if [[ -f /etc/squid/squid.conf ]]; then
+        echo "Config file size: $(du -h /etc/squid/squid.conf 2>/dev/null | cut -f1 || echo "unknown")"
+    fi
+    echo -e "${YELLOW}=========================${NC}\n"
 }
 
 # Hàm lấy danh sách proxy user từ database

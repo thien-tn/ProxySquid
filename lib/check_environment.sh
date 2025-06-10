@@ -27,32 +27,37 @@ check_bash() {
 # Phát hiện hệ điều hành
 detect_os() {
     if [[ -e /etc/debian_version ]]; then
-        export OStype="deb"
+        export OStype="debian"
         success_message "Phát hiện hệ điều hành: Debian/Ubuntu"
     elif [[ -e /etc/centos-release || -e /etc/redhat-release ]]; then
         export OStype="centos"
         success_message "Phát hiện hệ điều hành: CentOS/RHEL"
     else
         error_message "Script này chỉ hỗ trợ Debian, Ubuntu hoặc CentOS"
-        exit 3
+        return 1
     fi
 }
 
 # Phát hiện giao diện mạng
 detect_network_interface() {
-    export interface="$(ip -o -4 route show to default | awk '{print $5}')"
+    local detected_interface="$(ip -o -4 route show to default | awk '{print $5}' 2>/dev/null)"
     
     # Kiểm tra xem giao diện có tồn tại không
-    if [[ -n "$interface" && -d "/sys/class/net/$interface" ]]; then
+    if [[ -n "$detected_interface" && -d "/sys/class/net/$detected_interface" ]]; then
+        export interface="$detected_interface"
         success_message "Phát hiện giao diện mạng: $interface"
+        
+        # Lấy địa chỉ IP
+        export hostname=$(hostname -I | awk '{print $1}' 2>/dev/null || echo "unknown")
+        success_message "Địa chỉ IP máy chủ: $hostname"
+        
+        # Return interface name for functions that need it
+        echo "$interface"
+        return 0
     else
         error_message "Không thể phát hiện giao diện mạng"
-        exit 4
+        return 1
     fi
-    
-    # Lấy địa chỉ IP
-    export hostname=$(hostname -I | awk '{print $1}')
-    success_message "Địa chỉ IP máy chủ: $hostname"
 }
 
 # Kiểm tra các gói phụ thuộc cần thiết

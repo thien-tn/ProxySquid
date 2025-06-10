@@ -513,12 +513,26 @@ install_squid() {
         ((current_step++))
         info_message "Bước $current_step/$total_steps: Đang thực hiện $step..."
         
-        if ! $step; then
-            error_message "Lỗi trong bước: $step"
+        # Thực hiện step và kiểm tra kết quả
+        if $step; then
+            success_message "Hoàn thành bước $current_step/$total_steps: $step"
+        else
+            local exit_code=$?
+            error_message "Lỗi trong bước: $step (exit code: $exit_code)"
+            
+            # Hiển thị thêm debug info
+            echo -e "\n${RED}=== DEBUG INFO ===${NC}"
+            echo "Step failed: $step"
+            echo "Exit code: $exit_code"
+            echo "Current directory: $(pwd)"
+            echo "User: $(whoami)"
+            echo "OS Type: $OStype"
+            echo "Interface: $interface"
+            echo -e "${RED}==================${NC}\n"
+            
             return 1
         fi
         
-        success_message "Hoàn thành bước $current_step/$total_steps"
         echo ""
     done
     
