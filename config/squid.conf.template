@@ -1,0 +1,77 @@
+# config/squid.conf.template
+#
+# Template cho file cấu hình Squid HTTP proxy server
+# Tác giả: ThienTranJP
+# Chuyển đổi từ Dante SOCKS5 sang Squid HTTP
+
+# Cấu hình cổng HTTP proxy
+http_port %PORT%
+visible_hostname proxy-server
+
+# Cấu hình xác thực cơ bản
+auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwd
+auth_param basic realm Proxy Authentication Required
+auth_param basic credentialsttl 30 days
+auth_param basic casesensitive off
+acl authenticated proxy_auth REQUIRED
+http_access allow authenticated
+http_access deny all
+
+# Thiết lập DNS để sửa lỗi sending message trên Messenger
+dns_v4_first on
+dns_nameservers 8.8.8.8 8.8.4.4
+
+# Cấu hình hiệu suất
+maximum_object_size 128 MB
+cache_mem 256 MB
+pipeline_prefetch on
+
+# Cấu hình logging
+access_log /var/log/squid/access.log combined
+cache_log /var/log/squid/cache.log
+pid_filename /var/run/squid.pid
+
+# Cấu hình timeout
+connect_timeout 1 minute
+peer_connect_timeout 30 seconds
+read_timeout 5 minutes
+request_timeout 5 minutes
+
+# Cấu hình bảo mật và privacy
+forwarded_for off
+via off
+
+# Cho phép các header cần thiết
+request_header_access Allow allow all
+request_header_access Authorization allow all
+request_header_access WWW-Authenticate allow all
+request_header_access Proxy-Authorization allow all
+request_header_access Proxy-Authenticate allow all
+request_header_access Cache-Control allow all
+request_header_access Content-Encoding allow all
+request_header_access Content-Length allow all
+request_header_access Content-Type allow all
+request_header_access Date allow all
+request_header_access Expires allow all
+request_header_access Host allow all
+request_header_access If-Modified-Since allow all
+request_header_access Last-Modified allow all
+request_header_access Location allow all
+request_header_access Pragma allow all
+request_header_access Accept allow all
+request_header_access Accept-Charset allow all
+request_header_access Accept-Encoding allow all
+request_header_access Accept-Language allow all
+request_header_access Content-Language allow all
+request_header_access Mime-Version allow all
+request_header_access Retry-After allow all
+request_header_access Title allow all
+request_header_access Connection allow all
+request_header_access Proxy-Connection allow all
+request_header_access User-Agent allow all
+request_header_access Cookie allow all
+request_header_access All deny all
+
+# Ẩn thông tin proxy để bảo vệ privacy
+request_header_access X-Forwarded-For deny all
+request_header_access Via deny all 
